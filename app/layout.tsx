@@ -6,20 +6,20 @@ import { Toaster } from "react-hot-toast"
 import WalletContextProvider from "@/components/wallet/wallet-provider"
 import { ThemeProvider } from "@/components/theme-provider"
 import Script from 'next/script'
+import { CustomToaster } from "@/components/ui/toast"
 
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Solana Token Manager",
-  description: "Create, mint, and manage Solana tokens",
-    generator: 'v0.dev'
+  title: "Token Manager | Solana",
+  description: "Create, mint, and manage SPL tokens on Solana",
 }
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode
-}>) {
+}) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -38,8 +38,8 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           <WalletContextProvider>
+            <CustomToaster />
             {children}
-            <Toaster position="bottom-right" />
           </WalletContextProvider>
         </ThemeProvider>
       </body>

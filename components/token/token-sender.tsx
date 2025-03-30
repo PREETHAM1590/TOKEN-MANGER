@@ -12,7 +12,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import toast from "react-hot-toast"
+import { 
+  toastSuccess, 
+  toastError, 
+  toastLoading,
+  toast
+} from '@/components/ui/toast'
 import { useTransactionStore } from "@/lib/stores/transaction-store"
 import { sendTransactionWithRetry, getErrorMessage } from "@/lib/solana/transaction-utility"
 import { getOrCreateAssociatedTokenAccount } from "@/lib/solana/token-helper"
@@ -31,122 +36,100 @@ export default function TokenSender() {
 
   const sendToken = async (e: React.FormEvent) => {
     e.preventDefault()
-
+    
     if (!publicKey) {
-      toast.error("Wallet not connected")
+      toastError('Please connect your wallet', { id: 'wallet-connect-error' })
       return
     }
 
+    if (!mintAddress) {
+      toastError('Please enter a mint address', { id: 'mint-address-error' })
+      return
+    }
+
+    if (!recipientAddress) {
+      toastError('Please enter a recipient address', { id: 'recipient-address-error' })
+      return
+    }
+
+    const amountNum = parseFloat(amount)
+    if (isNaN(amountNum) || amountNum <= 0) {
+      toastError('Please enter a valid amount greater than 0', { id: 'amount-error' })
+      return
+    }
+
+    let pubkey: PublicKey
     try {
-      setIsLoading(true)
-      setTxSignature(null)
+      pubkey = new PublicKey(recipientAddress)
+    } catch (error) {
+      toastError('Invalid recipient address', { id: 'invalid-address-error' })
+      return
+    }
 
-      // Parse addresses
-      const mintPublicKey = new PublicKey(mintAddress)
-      const recipientPublicKey = new PublicKey(recipientAddress)
+    setIsLoading(true)
+    setTxSignature(null)
 
-      // Validate the mint
-      try {
-        await connection.getTokenSupply(mintPublicKey)
-      } catch (error) {
-        toast.error("Invalid mint address. Please verify the address is correct.")
-        setIsLoading(false)
-        return
-      }
+    try {
+      // Show loading toast with ID
+      const loadingToast = toastLoading('Preparing to send tokens...', { id: 'send-loading' })
 
-      toast.loading("Setting up token accounts...")
+      // Import dynamically to reduce initial load time
+      const { transferTokens } = await import('@/lib/solana/token-operations')
 
-      // Get or create token accounts using our helper
-      const senderTokenAccount = await token.getAssociatedTokenAddress(
-        mintPublicKey,
-        publicKey,
-        false,
-        token.TOKEN_PROGRAM_ID,
-        token.ASSOCIATED_TOKEN_PROGRAM_ID
-      )
+      // Update loading toast
+      toastLoading('Creating transaction...', { id: loadingToast })
 
-      // Check if sender token account exists
-      const senderAccountInfo = await connection.getAccountInfo(senderTokenAccount)
-      if (!senderAccountInfo) {
-        toast.error("You don't have any of these tokens in your wallet.")
-        setIsLoading(false)
-        return
-      }
+      // Get the token decimals
+      const { getMint } = await import('@solana/spl-token')
+      const mintInfo = await getMint(connection, new PublicKey(mintAddress))
+      
+      // Update loading toast
+      toastLoading('Please approve the transaction in your wallet...', { id: loadingToast })
 
-      // Get or create recipient token account
-      const recipientTokenAccount = await token.getAssociatedTokenAddress(
-        mintPublicKey,
-        recipientPublicKey,
-        false,
-        token.TOKEN_PROGRAM_ID,
-        token.ASSOCIATED_TOKEN_PROGRAM_ID
-      )
-
-      // Create a transaction
-      const transaction = new web3.Transaction()
-
-      // Check if recipient token account exists and create if needed
-      const recipientAccountInfo = await connection.getAccountInfo(recipientTokenAccount)
-      if (!recipientAccountInfo) {
-        // Create associated token account for recipient
-        transaction.add(
-          token.createAssociatedTokenAccountInstruction(
-            publicKey,
-            recipientTokenAccount,
-            recipientPublicKey,
-            mintPublicKey,
-            token.TOKEN_PROGRAM_ID,
-            token.ASSOCIATED_TOKEN_PROGRAM_ID
-          )
-        )
-      }
-
-      // Create transfer instruction
-      transaction.add(
-        token.createTransferInstruction(
-          senderTokenAccount,
-          recipientTokenAccount,
-          publicKey,
-          BigInt(Math.floor(Number.parseFloat(amount) * Math.pow(10, 9))), // Assuming 9 decimals
-          [],
-          token.TOKEN_PROGRAM_ID
-        )
-      )
-
-      // Send transaction using our utility with retries for blockhash expiration
-      const signature = await sendTransactionWithRetry(
+      // Send tokens
+      const sig = await transferTokens(
         connection,
-        { publicKey, sendTransaction },
-        transaction,
-        [], // No additional signers needed
         {
-          maxRetries: 3,
-          skipPreflight: false,
-          preflightCommitment: 'confirmed', 
-          confirmCommitment: 'confirmed',
-          maxTimeout: 90000 // 90 seconds
-        }
+          publicKey,
+          sendTransaction,
+        },
+        mintAddress,
+        recipientAddress,
+        amountNum
       )
 
-      // Set transaction signature
-      setTxSignature(signature)
+      // Update loading toast
+      toastLoading('Confirming transaction...', { id: loadingToast })
 
+      // Update state with transaction signature
+      setTxSignature(sig)
+      
       // Add to transaction history
       addTransaction({
-        id: signature,
-        type: "send",
-        tokenName: "Unknown", // We don't have token metadata here
-        tokenSymbol: "Unknown",
-        amount: Number.parseFloat(amount),
+        id: sig,
+        type: 'send',
+        tokenName: null,
+        tokenSymbol: null,
+        amount: amountNum,
         mintAddress: mintAddress,
         recipient: recipientAddress,
         timestamp: Date.now(),
-        status: "success",
+        status: 'success',
       })
 
+      // Dismiss loading toast and show success
+      toast.dismiss(loadingToast)
+      toastSuccess('Tokens sent successfully!', { id: 'send-success' })
+      
+      // Reset amount field
+      setAmount("")
+      
     } catch (error) {
-      console.error("Error sending tokens:", error)
-      toast.error(getErrorMessage(error))
+      console.error('Error sending token:', error)
+      toastError(
+        error instanceof Error ? error.message : 'Failed to send tokens', 
+        { id: 'send-error' }
+      )
     } finally {
       setIsLoading(false)
     }

@@ -4,6 +4,8 @@ import * as React from "react"
 import * as ToastPrimitives from "@radix-ui/react-toast"
 import { cva, type VariantProps } from "class-variance-authority"
 import { X } from "lucide-react"
+import { useState, useEffect, useRef } from 'react'
+import { toast, Toaster, Toast as HotToast, ToastPosition } from 'react-hot-toast'
 
 import { cn } from "@/lib/utils"
 
@@ -116,14 +118,286 @@ type ToastProps = React.ComponentPropsWithoutRef<typeof Toast>
 
 type ToastActionElement = React.ReactElement<typeof ToastAction>
 
-export {
-  type ToastProps,
-  type ToastActionElement,
-  ToastProvider,
-  ToastViewport,
-  Toast,
-  ToastTitle,
-  ToastDescription,
-  ToastClose,
-  ToastAction,
+// Define toast types
+type ToastType = 'success' | 'error' | 'loading' | 'custom'
+
+// Extend HotToast type
+interface ExtendedToast {
+  id: string
+  message: string
+  type: ToastType
+  visible: boolean
+  height?: number
+  duration?: number
 }
+
+// Toast container styles
+const toastContainerStyles = {
+  position: 'fixed' as const,
+  bottom: '20px',
+  right: '20px',
+  maxWidth: '420px',
+  zIndex: 9999,
+}
+
+// Individual toast styles
+const toastStyles = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  backgroundColor: '#333',
+  color: '#fff',
+  padding: '12px 16px',
+  borderRadius: '10px',
+  marginBottom: '10px',
+  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+  cursor: 'grab',
+  position: 'relative' as const,
+  overflow: 'hidden',
+  transition: 'transform 0.3s ease, opacity 0.3s ease',
+}
+
+// Close button styles
+const closeButtonStyles = {
+  background: 'none',
+  border: 'none',
+  color: '#fff',
+  cursor: 'pointer',
+  padding: '4px',
+  borderRadius: '4px',
+  marginLeft: '12px',
+  opacity: 0.7,
+  transition: 'opacity 0.2s',
+}
+
+interface CustomToastProps {
+  toast: ExtendedToast
+  onDismiss: (id: string) => void
+}
+
+export function CustomToast({ toast, onDismiss }: CustomToastProps) {
+  const [isDragging, setIsDragging] = useState(false)
+  const [startX, setStartX] = useState(0)
+  const [offsetX, setOffsetX] = useState(0)
+  const toastRef = useRef<HTMLDivElement>(null)
+
+  // Handle dismiss
+  const handleDismiss = () => {
+    onDismiss(toast.id)
+  }
+
+  // Set up touch/mouse event handlers
+  useEffect(() => {
+    const element = toastRef.current
+    if (!element) return
+
+    const handleTouchStart = (e: TouchEvent) => {
+      setIsDragging(true)
+      setStartX(e.touches[0].clientX)
+    }
+
+    const handleMouseDown = (e: MouseEvent) => {
+      setIsDragging(true)
+      setStartX(e.clientX)
+    }
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!isDragging) return
+      const currentX = e.touches[0].clientX
+      const diff = currentX - startX
+      if (diff > 0) {
+        setOffsetX(diff)
+      }
+    }
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return
+      const currentX = e.clientX
+      const diff = currentX - startX
+      if (diff > 0) {
+        setOffsetX(diff)
+      }
+    }
+
+    const handleTouchEnd = () => {
+      if (offsetX > (element.offsetWidth * 0.4)) {
+        handleDismiss()
+      } else {
+        setOffsetX(0)
+      }
+      setIsDragging(false)
+    }
+
+    const handleMouseUp = () => {
+      if (offsetX > (element.offsetWidth * 0.4)) {
+        handleDismiss()
+      } else {
+        setOffsetX(0)
+      }
+      setIsDragging(false)
+    }
+
+    element.addEventListener('touchstart', handleTouchStart)
+    element.addEventListener('mousedown', handleMouseDown)
+    document.addEventListener('touchmove', handleTouchMove)
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('touchend', handleTouchEnd)
+    document.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      element.removeEventListener('touchstart', handleTouchStart)
+      element.removeEventListener('mousedown', handleMouseDown)
+      document.removeEventListener('touchmove', handleTouchMove)
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('touchend', handleTouchEnd)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isDragging, startX, offsetX, toast.id])
+
+  // Get indicator color based on toast type
+  const getIndicatorColor = () => {
+    if (toast.type === 'success') return '#10b981'
+    if (toast.type === 'error') return '#ef4444'
+    if (toast.type === 'loading') return '#3b82f6'
+    return '#6b7280'
+  }
+
+  // Get icon based on toast type
+  const getIconContent = () => {
+    if (toast.type === 'success') return '✅'
+    if (toast.type === 'error') return '❌'
+    if (toast.type === 'loading') return '⏳'
+    return null
+  }
+
+  return (
+    <div
+      ref={toastRef}
+      style={{
+        ...toastStyles,
+        transform: `translateX(${offsetX}px)`,
+        opacity: 1 - offsetX / 500,
+        borderLeft: `4px solid ${getIndicatorColor()}`,
+      }}
+      className="toast-item"
+    >
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        {getIconContent() && (
+          <span style={{ marginRight: '10px', fontSize: '16px' }}>{getIconContent()}</span>
+        )}
+        <div>{toast.message}</div>
+      </div>
+      <button
+        onClick={handleDismiss}
+        style={closeButtonStyles}
+        onMouseOver={(e) => (e.currentTarget.style.opacity = '1')}
+        onMouseOut={(e) => (e.currentTarget.style.opacity = '0.7')}
+        aria-label="Close toast"
+      >
+        <X size={16} />
+      </button>
+    </div>
+  )
+}
+
+export function CustomToaster() {
+  const [toasts, setToasts] = useState<ExtendedToast[]>([])
+  
+  // Add toast to state
+  useEffect(() => {
+    // Subscribe to toast events
+    const unsubscribe = toast.onChange((toastList) => {
+      const mappedToasts: ExtendedToast[] = Object.values(toastList).map((t: any) => ({
+        id: t.id,
+        message: t.message || '',
+        type: t.type || 'custom',
+        visible: t.visible,
+        duration: t.duration,
+      }))
+      setToasts(mappedToasts)
+    })
+
+    return unsubscribe
+  }, [])
+
+  // Dismiss toast
+  const onDismiss = (id: string) => {
+    toast.dismiss(id)
+  }
+
+  return (
+    <>
+      <div style={toastContainerStyles}>
+        {toasts.slice(0, 3).map((toast, index) => {
+          return (
+            <div
+              key={toast.id}
+              style={{
+                position: 'relative',
+                marginBottom: '10px',
+                transform: toast.visible ? 'translateX(0)' : 'translateX(100%)',
+                opacity: toast.visible ? 1 : 0,
+                transition: 'transform 0.3s ease, opacity 0.3s ease',
+              }}
+            >
+              <CustomToast toast={toast} onDismiss={onDismiss} />
+            </div>
+          )
+        })}
+      </div>
+      <style jsx global>{`
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+        @keyframes slideOut {
+          from {
+            transform: translateX(0);
+            opacity: 1;
+          }
+          to {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+        }
+      `}</style>
+    </>
+  )
+}
+
+// Create custom toast methods
+const createToast = (message: string, type: ToastType, options = {}) => {
+  return toast(message, { 
+    ...options,
+    id: options?.id || `toast-${Date.now()}`,
+    duration: type === 'loading' ? Infinity : 5000,
+    // Pass along the type in a way that won't cause TS errors
+    data: { type }
+  })
+}
+
+// Exported methods
+export const toastSuccess = (message: string, options = {}) => 
+  createToast(message, 'success', options)
+
+export const toastError = (message: string, options = {}) => 
+  createToast(message, 'error', options)  
+
+export const toastLoading = (message: string, options = {}) => 
+  createToast(message, 'loading', options)
+
+// Set up exports for compatibility
+export const setToastDefaults = () => {
+  // Override the default toast methods
+  toast.success = toastSuccess
+  toast.error = toastError
+  toast.loading = toastLoading
+}
+
+export { toast }
