@@ -2,7 +2,8 @@ import {
   createAssociatedTokenAccountInstruction,
   getAssociatedTokenAddress,
   TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  getMint
 } from '@solana/spl-token';
 import { Connection, PublicKey, TransactionInstruction, Transaction } from '@solana/web3.js';
 import { toast } from 'react-hot-toast';
@@ -113,5 +114,60 @@ export async function doesTokenAccountExist(
   } catch (error) {
     console.error('Error checking token account existence:', error);
     return false;
+  }
+}
+
+/**
+ * Checks if a wallet address is the mint authority for a token
+ */
+export async function isMintAuthority(
+  connection: Connection,
+  mintAddress: string,
+  walletAddress: PublicKey
+): Promise<boolean> {
+  try {
+    const mintPublicKey = new PublicKey(mintAddress);
+    
+    // Get mint info
+    const mintInfo = await getMint(
+      connection,
+      mintPublicKey,
+      'confirmed',
+      TOKEN_PROGRAM_ID
+    );
+    
+    // Check if wallet is mint authority
+    return (
+      mintInfo.mintAuthority !== null &&
+      mintInfo.mintAuthority.equals(walletAddress)
+    );
+  } catch (error) {
+    console.error('Error checking mint authority:', error);
+    return false;
+  }
+}
+
+/**
+ * Get token decimals
+ */
+export async function getTokenDecimals(
+  connection: Connection,
+  mintAddress: string
+): Promise<number> {
+  try {
+    const mintPublicKey = new PublicKey(mintAddress);
+    
+    // Get mint info
+    const mintInfo = await getMint(
+      connection,
+      mintPublicKey,
+      'confirmed',
+      TOKEN_PROGRAM_ID
+    );
+    
+    return mintInfo.decimals;
+  } catch (error) {
+    console.error('Error getting token decimals:', error);
+    return 9; // Default to 9 decimals if error
   }
 } 

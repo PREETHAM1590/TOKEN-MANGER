@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { useTransactionStore } from "@/lib/stores/transaction-store"
 import { getCachedConnection } from "@/lib/solana/connection-helper"
-import { Loader2 } from "lucide-react"
+import { Loader2, Copy, Check } from "lucide-react"
 
 // Cache validation patterns for performance
 const NAME_PATTERN = /^[a-zA-Z0-9 ]{1,32}$/;
@@ -182,6 +182,17 @@ export default function TokenCreator() {
     }
   }, [publicKey, signTransaction, connected, name, symbol, decimals, addTransaction, validateInputs]);
 
+  const [copied, setCopied] = useState(false);
+
+  // Add a copyToClipboard function
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      // Reset the copied state after 2 seconds
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
   return (
     <Card className="w-full">
       <CardHeader>
@@ -260,9 +271,26 @@ export default function TokenCreator() {
             <AlertTitle className="text-green-600 dark:text-green-400">Token Created Successfully!</AlertTitle>
             <AlertDescription className="text-green-600 dark:text-green-400">
               Your new token mint address:
-              <code className="relative rounded bg-green-100 dark:bg-green-900/50 px-[0.3rem] py-[0.2rem] font-mono text-sm font-semibold text-green-900 dark:text-green-400 block mt-2 truncate">
-                {txState.mintAddress}
-              </code>
+              <div className="flex items-center mt-2 gap-2">
+                <code className="relative rounded bg-green-100 dark:bg-green-900/50 px-[0.3rem] py-[0.2rem] font-mono text-sm font-semibold text-green-900 dark:text-green-400 flex-1 truncate">
+                  {txState.mintAddress}
+                </code>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="h-8 px-2 border-green-200 dark:border-green-800 hover:bg-green-100 dark:hover:bg-green-900/50"
+                  onClick={() => copyToClipboard(txState.mintAddress || '')}
+                >
+                  {copied ? (
+                    <Check className="h-4 w-4 text-green-600 dark:text-green-400" />
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4 mr-1 text-green-600 dark:text-green-400" />
+                      <span className="text-xs text-green-600 dark:text-green-400">Copy</span>
+                    </>
+                  )}
+                </Button>
+              </div>
             </AlertDescription>
           </Alert>
         </CardContent>

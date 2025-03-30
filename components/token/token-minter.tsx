@@ -1,22 +1,18 @@
 "use client"
 
-import type React from "react"
-
-import { useState } from "react"
-import { useWallet, useConnection } from "@solana/wallet-adapter-react"
-import * as web3 from "@solana/web3.js"
-import * as token from "@solana/spl-token"
-import { PublicKey, Connection } from "@solana/web3.js"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Loader2 } from "lucide-react"
-import toast from "react-hot-toast"
-import { useTransactionStore } from "@/lib/stores/transaction-store"
-import { doesTokenAccountExist } from "@/lib/solana/token-helper"
-import { createAssociatedTokenAccountInstruction, getAssociatedTokenAddress, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token"
+import { useState, useEffect } from 'react'
+import { useConnection, useWallet } from '@solana/wallet-adapter-react'
+import { PublicKey, Connection } from '@solana/web3.js'
+import * as web3 from '@solana/web3.js'
+import { getMint } from '@solana/spl-token'
+import toast, { Toaster, ToastPosition } from 'react-hot-toast'
+import { Loader2, Copy, Check } from 'lucide-react'
+import { Button, Label, Input, Alert, AlertTitle, AlertDescription } from '@/components/ui'
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui'
+import { TransactionLink } from '@/components/transaction-link'
+import { useTransactionStore } from '@/lib/stores/transaction-store'
+import { isMintAuthority, getTokenDecimals } from '@/lib/solana/token-helper'
+import { sendTransactionWithRetry } from '@/lib/solana/transaction-utility'
 
 /**
  * Confirm a transaction with exponential backoff retry strategy for better reliability
@@ -62,258 +58,350 @@ async function confirmTransactionWithExponentialBackoff(
   return confirmResult;
 }
 
-export default function TokenMinter() {
+export function TokenMinter() {
   const { connection } = useConnection()
   const { publicKey, sendTransaction } = useWallet()
   const { addTransaction } = useTransactionStore()
-
+  
   const [mintAddress, setMintAddress] = useState("")
   const [amount, setAmount] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const [txSignature, setTxSignature] = useState<string | null>(null)
+  const [signature, setSignature] = useState<string | null>(null)
+  const [tokenDecimals, setTokenDecimals] = useState(9) // Default to 9 decimals
+  const [isMintAuth, setIsMintAuth] = useState(false)
+  const [copied, setCopied] = useState(false)
 
-  const mintToken = async (e: React.FormEvent) => {
+  const toastOptions = {
+    duration: 5000,
+    position: 'bottom-right' as ToastPosition,
+    style: {
+      background: '#333',
+      color: '#fff',
+      borderRadius: '10px',
+    },
+    success: {
+      duration: 3000,
+      icon: '✅',
+    },
+    error: {
+      duration: 4000,
+      icon: '❌',
+    },
+    loading: {
+      duration: Infinity,
+      icon: '⏳',
+    },
+  }
+
+  // Check if connected wallet is the mint authority for the token
+  useEffect(() => {
+    async function checkMintAuth() {
+      if (!publicKey || !mintAddress) {
+        setIsMintAuth(false)
+        return
+      }
+
+      try {
+        const mintPubkey = new PublicKey(mintAddress)
+        
+        // Get mint info to check decimals
+        const mintInfo = await getMint(connection, mintPubkey)
+        setTokenDecimals(mintInfo.decimals)
+        
+        // Check mint authority
+        const hasAuthority = await isMintAuthority(
+          connection,
+          mintAddress,
+          publicKey
+        )
+        
+        setIsMintAuth(hasAuthority)
+      } catch (error) {
+        console.error('Error checking mint authority:', error)
+        setIsMintAuth(false)
+      }
+    }
+    
+    checkMintAuth()
+  }, [mintAddress, publicKey, connection])
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+      toast.success("Copied to clipboard!")
+    })
+  }
+
+  async function mintToken(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
-
+    
     if (!publicKey) {
-      toast.error("Wallet not connected")
+      toast.error('Please connect your wallet', {
+        ...toastOptions,
+        id: 'wallet-connect-error',
+      })
       return
     }
 
+    if (!mintAddress) {
+      toast.error('Please enter a mint address', {
+        ...toastOptions,
+        id: 'mint-address-error',
+      })
+      return
+    }
+
+    if (!isMintAuth) {
+      toast.error('Your wallet is not the mint authority for this token', {
+        ...toastOptions,
+        id: 'mint-auth-error',
+      })
+      return
+    }
+
+    const amountNum = parseFloat(amount)
+    if (isNaN(amountNum) || amountNum <= 0) {
+      toast.error('Please enter a valid amount greater than 0', {
+        ...toastOptions,
+        id: 'amount-error',
+      })
+      return
+    }
+
+    setIsLoading(true)
+    setSignature(null)
+
     try {
-      setIsLoading(true)
-      setTxSignature(null)
+      // Show loading toast with ID to dismiss it later
+      const loadingToast = toast.loading('Preparing to mint tokens...', {
+        ...toastOptions,
+        id: 'mint-loading',
+      })
+
+      // Get mint info and validate
+      const mintPubkey = new PublicKey(mintAddress)
       
-      // Validate input
-      if (!mintAddress || !amount || parseFloat(amount) <= 0) {
-        toast.error("Please enter a valid mint address and amount")
-        setIsLoading(false)
-        return
-      }
+      // Update loading message
+      toast.loading('Creating transaction...', {
+        ...toastOptions,
+        id: loadingToast,
+      })
 
-      // Parse mint address
-      let mintPublicKey: PublicKey
-      try {
-        mintPublicKey = new PublicKey(mintAddress)
-      } catch (error) {
-        toast.error("Invalid mint address format")
-        setIsLoading(false)
-        return
-      }
-      
-      // Validate the mint
-      try {
-        await connection.getTokenSupply(mintPublicKey)
-      } catch (error) {
-        toast.error("Invalid mint address. Please verify the address is correct.")
-        setIsLoading(false)
-        return
-      }
+      // Import and mint tokens
+      const { mintTokens } = await import('@/lib/solana/token-operations')
+      const mintAmount = Math.floor(amountNum * Math.pow(10, tokenDecimals))
 
-      // Get associated token account address
-      const associatedTokenAddress = await getAssociatedTokenAddress(
-        mintPublicKey,
-        publicKey,
-        false,
-        TOKEN_PROGRAM_ID,
-        ASSOCIATED_TOKEN_PROGRAM_ID
-      )
+      // Update loading message for transaction
+      toast.loading('Please approve the transaction in your wallet...', {
+        ...toastOptions,
+        id: loadingToast,
+      })
 
-      // Check if token account exists
-      const accountExists = await doesTokenAccountExist(
-        connection, 
-        mintPublicKey, 
-        publicKey
-      )
-
-      // Create a new transaction
-      const transaction = new web3.Transaction()
-      
-      // If token account doesn't exist, add instruction to create it
-      if (!accountExists) {
-        transaction.add(
-          createAssociatedTokenAccountInstruction(
-            publicKey,
-            associatedTokenAddress,
-            publicKey,
-            mintPublicKey,
-            TOKEN_PROGRAM_ID,
-            ASSOCIATED_TOKEN_PROGRAM_ID
-          )
-        )
-      }
-
-      // Add mint instruction
-      const amountToMint = BigInt(Math.floor(Number.parseFloat(amount) * Math.pow(10, 9))) // Assuming 9 decimals
-      
-      transaction.add(
-        token.createMintToInstruction(
-          mintPublicKey,
-          associatedTokenAddress,
+      const sig = await mintTokens(
+        connection,
+        {
           publicKey,
-          amountToMint,
-          [],
-          token.TOKEN_PROGRAM_ID
-        )
+          sendTransaction,
+        },
+        mintAddress,
+        mintAmount
       )
 
-      // Get a fresh blockhash right before sending
-      // This ensures we have the most current blockhash
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
-      transaction.recentBlockhash = blockhash;
-      transaction.lastValidBlockHeight = lastValidBlockHeight;
+      // Update loading message for confirmation
+      toast.loading('Confirming transaction...', {
+        ...toastOptions,
+        id: loadingToast,
+      })
+
+      // Update state
+      setSignature(sig)
       
-      // Send transaction through wallet adapter
-      const loadingToast = toast.loading(accountExists ? 'Minting tokens...' : 'Creating account and minting tokens...')
-      
-      // Let the wallet handle the signing with better preflight and commitment settings
-      const signature = await sendTransaction(transaction, connection, {
-        skipPreflight: false,
-        preflightCommitment: 'finalized', // Use stronger commitment level
-        maxRetries: 5 // Add retries for sending
+      // Add to transaction history
+      addTransaction({
+        id: sig,
+        type: 'mint',
+        tokenName: null,
+        tokenSymbol: null,
+        amount: amountNum,
+        mintAddress: mintAddress,
+        recipient: publicKey.toString(),
+        timestamp: Date.now(),
+        status: 'success',
+      })
+
+      // Clear loading toast and show success
+      toast.dismiss(loadingToast)
+      toast.success('Tokens minted successfully!', {
+        ...toastOptions,
+        id: 'mint-success',
       })
       
-      // Wait for confirmation
-      toast.dismiss(loadingToast)
-      const confirmToast = toast.loading('Confirming transaction...')
+      // Reset amount field
+      setAmount("")
       
-      try {
-        // Use a simpler confirmation approach that is less susceptible to blockhash expiration
-        const confirmationResult = await confirmTransactionWithExponentialBackoff(
-          connection,
-          signature,
-          90000 // 90 seconds timeout
-        );
-        
-        toast.dismiss(confirmToast);
-        
-        if (confirmationResult.value.err) {
-          throw new Error(`Transaction confirmed but failed: ${JSON.stringify(confirmationResult.value.err)}`);
-        }
-        
-        // Set transaction signature
-        setTxSignature(signature);
-        
-        // Add to transaction history
-        addTransaction({
-          id: signature,
-          type: "mint",
-          tokenName: "Unknown", // We don't have token metadata here
-          tokenSymbol: "Unknown",
-          amount: Number.parseFloat(amount),
-          mintAddress: mintAddress,
-          recipient: publicKey.toString(),
-          timestamp: Date.now(),
-          status: "success",
-        });
-        
-        toast.success("Tokens minted successfully!");
-        
-        // Clear the form
-        setAmount("");
-      } catch (err) {
-        toast.dismiss(confirmToast);
-        
-        // Check if this is a timeout error
-        if (err instanceof Error && err.message.includes('timeout')) {
-          toast.custom(
-            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900 rounded-md px-4 py-3">
-              <p className="text-amber-800 dark:text-amber-300 font-medium">Transaction may have succeeded, but confirmation timed out.</p>
-              <p className="text-amber-700 dark:text-amber-400 text-xs mt-2">Check the transaction in Solana Explorer:</p>
-              <a
-                href={`https://explorer.solana.com/tx/${signature}?cluster=devnet`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue-600 dark:text-blue-400 hover:underline mt-1 inline-block"
-              >
-                View transaction {signature.slice(0, 8)}...
-              </a>
-            </div>,
-            { duration: 10000 }
-          );
-          
-          // Still set the signature so user can check it
-          setTxSignature(signature);
-        } else {
-          // For other errors
-          throw err;
-        }
-      }
     } catch (error) {
-      console.error("Error minting tokens:", error)
-      const errorMessage = error instanceof Error ? error.message : "Unknown error occurred"
-      toast.error(`Failed to mint tokens: ${errorMessage.includes("User") ? "User rejected transaction" : errorMessage}`)
+      console.error('Error minting token:', error)
+      
+      // Show error toast with better styling
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to mint tokens', 
+        {
+          ...toastOptions,
+          id: 'mint-error',
+        }
+      )
     } finally {
       setIsLoading(false)
     }
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Mint Tokens</CardTitle>
-        <CardDescription>Mint new tokens to your wallet</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={mintToken} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="mintAddress">Token Mint Address</Label>
-            <Input
-              id="mintAddress"
-              placeholder="Enter token mint address"
-              value={mintAddress}
-              onChange={(e) => setMintAddress(e.target.value)}
-              required
-            />
-          </div>
+    <>
+      <Toaster 
+        toastOptions={{
+          ...toastOptions,
+          className: '',
+          style: {
+            ...toastOptions.style,
+            maxWidth: '420px',
+          },
+        }}
+        containerStyle={{
+          top: 'auto',
+          bottom: 20,
+          right: 20,
+        }}
+        gutter={8}
+        containerClassName="toast-container"
+        reverseOrder={false}
+        limit={2}
+      />
+      <style jsx global>{`
+        .toast-container {
+          max-width: 420px !important;
+        }
+        .animate-enter {
+          animation: slideIn 0.3s ease-out;
+        }
+        .animate-leave {
+          animation: slideOut 0.3s ease-in forwards;
+        }
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+        @keyframes slideOut {
+          from {
+            transform: translateX(0);
+            opacity: 1;
+          }
+          to {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+        }
+        .Toastify__toast {
+          cursor: pointer;
+        }
+        .Toastify__toast-body {
+          margin: 0;
+          padding: 0;
+        }
+      `}</style>
+      <Card>
+        <CardHeader>
+          <CardTitle>Mint Tokens</CardTitle>
+          <CardDescription>
+            Mint additional tokens to an existing SPL token
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {publicKey && mintAddress && !isMintAuth && (
+            <Alert className="mb-4 bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-900">
+              <AlertTitle className="text-red-600 dark:text-red-400">Warning!</AlertTitle>
+              <AlertDescription className="text-red-600 dark:text-red-400">
+                Your wallet is not the mint authority for this token. You cannot mint new tokens.
+              </AlertDescription>
+            </Alert>
+          )}
+          
+          <form onSubmit={mintToken} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="mintAddress">Token Mint Address</Label>
+              <Input
+                id="mintAddress"
+                placeholder="Enter token mint address"
+                value={mintAddress}
+                onChange={(e) => setMintAddress(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="amount">Amount</Label>
+              <Input
+                id="amount"
+                type="number"
+                placeholder="Enter amount to mint"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                required
+                min="0"
+                step="any"
+              />
+              {tokenDecimals !== 9 && (
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Token has {tokenDecimals} decimals
+                </p>
+              )}
+            </div>
+            
+            <Button 
+              type="submit" 
+              className="w-full"
+              disabled={isLoading || !publicKey || !mintAddress || !isMintAuth || !amount || parseFloat(amount) <= 0}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Minting...
+                </>
+              ) : (
+                'Mint Tokens'
+              )}
+            </Button>
+          </form>
 
-          <div className="space-y-2">
-            <Label htmlFor="amount">Amount</Label>
-            <Input
-              id="amount"
-              type="number"
-              step="any"
-              min="0"
-              placeholder="1.0"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              required
-            />
-          </div>
-
-          <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Minting...
-              </>
-            ) : (
-              "Mint Tokens"
-            )}
-          </Button>
-        </form>
-
-        {txSignature && (
-          <Alert className="mt-4 bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-900">
-            <AlertTitle className="text-green-600 dark:text-green-400">Transaction Successful!</AlertTitle>
-            <AlertDescription className="text-green-600 dark:text-green-400">
-              Transaction Signature:
-              <code className="relative rounded bg-green-100 dark:bg-green-900/50 px-[0.3rem] py-[0.2rem] font-mono text-sm font-semibold text-green-900 dark:text-green-400 block mt-2 truncate">
-                {txSignature}
-              </code>
-              <a
-                href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue-600 dark:text-blue-400 hover:underline mt-2 inline-block"
-              >
-                View on Solana Explorer
-              </a>
-            </AlertDescription>
-          </Alert>
-        )}
-      </CardContent>
-    </Card>
+          {signature && (
+            <div className="mt-4 p-3 border rounded-md bg-green-50 dark:bg-green-900 dark:border-green-800 text-xs">
+              <div className="flex justify-between items-center mb-1">
+                <p className="font-medium text-green-800 dark:text-green-400">Transaction submitted:</p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs text-green-800 dark:text-green-400"
+                  onClick={() => copyToClipboard(signature)}
+                >
+                  {copied ? (
+                    <Check className="h-3 w-3 mr-1" />
+                  ) : (
+                    <Copy className="h-3 w-3 mr-1" />
+                  )}
+                  Copy
+                </Button>
+              </div>
+              <TransactionLink signature={signature} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </>
   )
 }
 

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, memo } from "react"
 import { useWallet } from "@solana/wallet-adapter-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { Loader2, Power } from "lucide-react"
+import { Loader2, Power, Wallet } from "lucide-react"
 import { isWalletReady } from "@/lib/solana/connection-helper"
 
 // Use type declarations instead of global interface to avoid conflicts
@@ -94,7 +94,6 @@ function WalletButton({ className }: WalletButtonProps) {
       )
     }
     
-    const walletName = detectedWallet || "Wallet"
     return (
       <Button 
         variant="outline"
@@ -107,7 +106,8 @@ function WalletButton({ className }: WalletButtonProps) {
         onClick={handleConnection}
         disabled={!wallet}
       >
-        Connect {walletName}
+        <Wallet className="mr-2 h-4 w-4" />
+        Connect Wallet
       </Button>
     )
   }

@@ -5,6 +5,7 @@ import "./globals.css"
 import { Toaster } from "react-hot-toast"
 import WalletContextProvider from "@/components/wallet/wallet-provider"
 import { ThemeProvider } from "@/components/theme-provider"
+import Script from 'next/script'
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -21,6 +22,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {process.env.NODE_ENV === 'development' && (
+          <Script
+            src="https://unpkg.com/react@18/umd/react.development.js"
+            crossOrigin="anonymous"
+          />
+        )}
+      </head>
       <body className={inter.className}>
         <ThemeProvider
           attribute="class"

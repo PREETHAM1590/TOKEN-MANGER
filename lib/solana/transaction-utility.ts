@@ -217,4 +217,182 @@ export function getErrorMessage(error: any): string {
   
   // Return a more generic message if we can't identify the specific error
   return `Transaction error: ${message.slice(0, 100)}${message.length > 100 ? '...' : ''}`;
+}
+
+/**
+ * Extracts a user-friendly error message from a transaction error
+ */
+export function getErrorForTransaction(rawMessage: string): string {
+  // Define common error patterns and their user-friendly messages
+  const errorMap: Record<string, string> = {
+    'Attempt to debit an account but found no record of a prior credit': 
+      'Insufficient funds for transaction',
+    'insufficient funds': 
+      'Insufficient SOL balance to pay for transaction fees',
+    'not the mint authority': 
+      'Your wallet is not the mint authority for this token',
+    'already in use': 
+      'This token already exists. Use a different mint address.',
+    'Program failed to complete': 
+      'Transaction failed to process',
+    'Transaction was not confirmed': 
+      'Transaction was not confirmed within the timeout period',
+    'blockhash not found': 
+      'Transaction blockhash expired. Please try again.',
+    'RPC request error': 
+      'Network connection error. Please check your internet connection.',
+    'Token account does not exist': 
+      'Token account not found. It may need to be created first.',
+    'No token mint specified': 
+      'No token mint address was provided',
+    'Invalid program id': 
+      'Invalid program ID used in the transaction',
+    'nonce is stale': 
+      'Transaction nonce is stale. Please retry with a fresh nonce.',
+    'Signature verification failed': 
+      'Transaction signature verification failed. Please check your wallet connection.',
+  };
+
+  // Process the raw message to find matching error patterns
+  let errorMessage = 'Transaction failed';
+  
+  // First try exact message matches
+  if (errorMap[rawMessage]) {
+    return errorMap[rawMessage];
+  }
+  
+  // Then try partial matches
+  for (const [errorPattern, friendlyMessage] of Object.entries(errorMap)) {
+    if (rawMessage.includes(errorPattern)) {
+      return friendlyMessage;
+    }
+  }
+  
+  // If it contains "Attempt to load an invalid account"
+  if (rawMessage.includes('Attempt to load an invalid account')) {
+    return 'Invalid account specified in transaction. Please check all addresses.';
+  }
+  
+  // Return the raw message as a fallback
+  return `Transaction failed: ${rawMessage}`;
+}
+
+/**
+ * Enhanced send transaction function with better error handling specifically for token operations
+ */
+export async function sendTokenTransaction(
+  connection: Connection,
+  wallet: any,
+  transaction: Transaction,
+  signers: Keypair[] = [],
+  options: {
+    maxRetries?: number;
+    skipPreflight?: boolean;
+    preflightCommitment?: Commitment;
+    confirmCommitment?: Commitment;
+    maxTimeout?: number;
+  } = {}
+): Promise<string> {
+  const {
+    maxRetries = 3,
+    skipPreflight = false,
+    preflightCommitment = 'confirmed',
+    confirmCommitment = 'confirmed',
+    maxTimeout = 60000 // Default to 60 seconds
+  } = options;
+
+  let attempt = 0;
+  let lastError = null;
+
+  // Get latest blockhash before sending
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(preflightCommitment);
+  transaction.recentBlockhash = blockhash;
+  transaction.lastValidBlockHeight = lastValidBlockHeight;
+  
+  // Add a uniqueness nonce field to avoid duplicate transactions
+  transaction.feePayer = wallet.publicKey;
+  
+  if (signers.length > 0) {
+    transaction.sign(...signers);
+  }
+  
+  const loadingToast = toast.loading('Processing transaction...');
+  
+  try {
+    while (attempt < maxRetries) {
+      attempt++;
+      try {
+        // Send transaction through wallet adapter
+        const signature = await wallet.sendTransaction(transaction, connection, {
+          skipPreflight,
+          preflightCommitment,
+          maxRetries: 2,
+        });
+      
+        toast.dismiss(loadingToast);
+        const confirmToast = toast.loading('Confirming transaction...');
+      
+        try {
+          // Wait for confirmation with a timeout
+          await Promise.race([
+            connection.confirmTransaction({
+              signature,
+              blockhash,
+              lastValidBlockHeight
+            }, confirmCommitment),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Transaction confirmation timeout')), maxTimeout)
+            )
+          ]);
+          
+          toast.dismiss(confirmToast);
+          return signature;
+        } catch (confirmError: any) {
+          toast.dismiss(confirmToast);
+          
+          if (confirmError.message?.includes('timeout')) {
+            // For timeout errors, provide a signature and notify the user
+            toast.warning(
+              'Transaction may have succeeded, but confirmation timed out. Please check explorer.'
+            );
+            return signature;
+          } else {
+            throw confirmError;
+          }
+        }
+      } catch (error: any) {
+        lastError = error;
+        
+        // If this is the final retry, throw the error
+        if (attempt >= maxRetries) {
+          throw error;
+        }
+        
+        // If blockhash not found, get a new one and retry
+        if (error.message?.includes('blockhash not found')) {
+          const { blockhash: newBlockhash, lastValidBlockHeight: newLastValidBlockHeight } = 
+            await connection.getLatestBlockhash(preflightCommitment);
+          transaction.recentBlockhash = newBlockhash;
+          transaction.lastValidBlockHeight = newLastValidBlockHeight;
+          // Retry immediately with new blockhash
+          continue;
+        }
+        
+        // For other errors, wait and retry
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
+    }
+    
+    // This should never be reached due to the throw in the loop
+    throw lastError || new Error('Transaction failed after maximum retries');
+  } catch (error: any) {
+    toast.dismiss(loadingToast);
+    
+    // Extract and convert error to user-friendly message
+    const errorMessage = error.message || 'Unknown error occurred';
+    const friendlyMessage = getErrorForTransaction(errorMessage);
+    
+    // Throw error with friendly message
+    throw new Error(friendlyMessage);
+  }
 } 

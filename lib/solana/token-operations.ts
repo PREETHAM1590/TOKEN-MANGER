@@ -14,7 +14,9 @@ import {
   getMint,
   getAssociatedTokenAddress,
   TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountInstruction,
+  createMintToInstruction
 } from '@solana/spl-token';
 import { sendTransactionWithRetry } from './transaction-utility';
 import { toast } from 'react-hot-toast';
@@ -91,62 +93,95 @@ export async function mintTokens(
 ): Promise<string> {
   try {
     // Parse mint address
-    const mintPublicKey = new PublicKey(mintAddress);
+    const mintPublicKey = new PublicKey(mintAddress)
     
     // Get destination address (default to wallet address if not provided)
     const destinationPublicKey = destinationAddress 
       ? new PublicKey(destinationAddress) 
-      : wallet.publicKey;
+      : wallet.publicKey
     
     // Get mint info to determine decimals
-    const mintInfo = await getMint(connection, mintPublicKey);
+    const mintInfo = await getMint(connection, mintPublicKey)
     
-    // Calculate amount with decimals
-    const tokenAmount = Math.floor(amount * Math.pow(10, mintInfo.decimals));
+    // Verify mint authority
+    if (!mintInfo.mintAuthority?.equals(wallet.publicKey)) {
+      throw new Error('Connected wallet is not the mint authority for this token')
+    }
     
-    // Get or create associated token account
+    // Get associated token account
     const tokenAccount = await getAssociatedTokenAddress(
       mintPublicKey,
       destinationPublicKey,
       false,
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID
-    );
+    )
     
     // Check if token account exists
-    const tokenAccountInfo = await connection.getAccountInfo(tokenAccount);
+    const tokenAccountInfo = await connection.getAccountInfo(tokenAccount)
     
-    const transaction = new Transaction();
+    const transaction = new Transaction()
     
     // If token account doesn't exist, create it
     if (!tokenAccountInfo) {
-      transaction.add(
-        // Create associated token account instruction
-        // Will be created via the SPL Token library
-      );
+      const createATAInstruction = createAssociatedTokenAccountInstruction(
+        wallet.publicKey,
+        tokenAccount,
+        destinationPublicKey,
+        mintPublicKey,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      )
+      transaction.add(createATAInstruction)
     }
     
     // Add mint instruction
-    // To be created via the SPL Token library
+    const mintInstruction = createMintToInstruction(
+      mintPublicKey,
+      tokenAccount,
+      wallet.publicKey,
+      BigInt(amount),
+      [],
+      TOKEN_PROGRAM_ID
+    )
+    transaction.add(mintInstruction)
     
-    // Send transaction
+    // Send transaction with improved reliability
     const signature = await sendTransactionWithRetry(
       connection,
       wallet,
       transaction,
-      [], // No additional signers needed
+      [],
       {
         maxRetries: 3,
         skipPreflight: false,
-        preflightCommitment: 'confirmed',
-        confirmCommitment: 'confirmed'
+        preflightCommitment: 'finalized',
+        confirmCommitment: 'finalized',
+        maxTimeout: 120000 // 2 minutes
       }
-    );
+    )
     
-    return signature;
+    return signature
+    
   } catch (error) {
-    console.error('Error minting tokens:', error);
-    throw error;
+    console.error('Error in mintTokens:', error)
+    
+    // Provide more specific error messages
+    if (error instanceof Error) {
+      if (error.message.includes('not the mint authority')) {
+        throw new Error('Your wallet is not the mint authority for this token')
+      } else if (error.message.includes('insufficient funds')) {
+        throw new Error('Insufficient SOL balance to pay for transaction fees')
+      } else if (error.message.includes('0x1')) {
+        throw new Error('Transaction simulation failed. Please check your inputs and try again')
+      } else if (error.message.includes('blockhash')) {
+        throw new Error('Transaction timed out. Please try again')
+      } else if (error.message.includes('Transaction was not confirmed')) {
+        throw new Error('Transaction was not confirmed in time. Please check the explorer for status')
+      }
+    }
+    
+    throw error
   }
 }
 

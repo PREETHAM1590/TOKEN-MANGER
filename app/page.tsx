@@ -1,10 +1,9 @@
 "use client"
 import Header from "@/components/header"
 import WalletConnect from "@/components/wallet/wallet-connect"
-import QuickConnectWallet from "@/components/wallet/quick-connect-wallet"
 import { useWallet } from "@solana/wallet-adapter-react"
 import TokenCreator from "@/components/token/token-creator"
-import TokenMinter from "@/components/token/token-minter"
+import { TokenMinter } from "@/components/token/token-minter"
 import TokenSender from "@/components/token/token-sender"
 import TransactionHistory from "@/components/transaction-history"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -18,15 +17,8 @@ export default function Home() {
       <Header />
       <div className="flex-1 container mx-auto px-4 py-8 max-w-4xl">
         {!connected ? (
-          <div className="flex flex-col items-center justify-center h-[80vh] gap-10">
-            <QuickConnectWallet
-              onConnectSuccess={() => console.log("Wallet connected successfully")}
-              onConnectError={(error: Error) => console.error("Connection error:", error)}
-            />
-            <div className="text-center">
-              <p className="text-sm text-muted-foreground mb-4">or use wallet adapter</p>
-              <WalletConnect />
-            </div>
+          <div className="flex flex-col items-center justify-center h-[80vh]">
+            <WalletConnect />
           </div>
         ) : (
           <div className="space-y-8">
