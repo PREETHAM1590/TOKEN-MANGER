@@ -7,7 +7,8 @@ import {
   VersionedTransaction,
   Keypair,
   TransactionMessage,
-  TransactionInstruction
+  TransactionInstruction,
+  Commitment
 } from '@solana/web3.js';
 import { toast } from 'react-hot-toast';
 
@@ -35,11 +36,11 @@ export async function sendTransactionWithRetry(
   options: SendTransactionOptions = {}
 ): Promise<string> {
   const {
-    maxRetries = 3,
+    maxRetries = 5,
     skipPreflight = false,
-    preflightCommitment = 'confirmed',
+    preflightCommitment = 'processed',
     confirmCommitment = 'confirmed',
-    maxTimeout = 120000 // 2 minutes
+    maxTimeout = 180000 // 3 minutes
   } = options;
   
   let signature = '';
@@ -49,12 +50,18 @@ export async function sendTransactionWithRetry(
   
   const loadingToast = toast.loading('Preparing transaction...');
   
+  // Verify wallet is connected before attempting transaction
+  if (!wallet.publicKey) {
+    toast.dismiss(loadingToast);
+    throw new Error('Wallet is not connected. Please connect your wallet and try again.');
+  }
+  
   while (attempt < maxRetries && !success) {
     try {
       attempt++;
       console.log(`Transaction attempt ${attempt}/${maxRetries}`);
       
-      // Get fresh blockhash using finalized commitment for maximum reliability
+      // Get fresh blockhash for each attempt to prevent blockhash expiration issues
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash({
         commitment: 'finalized' // Always use finalized for blockhash to prevent rapid expiration
       });
@@ -74,6 +81,11 @@ export async function sendTransactionWithRetry(
       toast.dismiss(loadingToast);
       toast.loading(`Please approve transaction in your wallet (Attempt ${attempt}/${maxRetries})...`);
       
+      // Verify wallet is still connected right before sending
+      if (!wallet.publicKey) {
+        throw new Error('Wallet disconnected. Please reconnect and try again.');
+      }
+      
       // Send the transaction
       signature = await wallet.sendTransaction(transaction, connection, {
         skipPreflight,
@@ -86,7 +98,7 @@ export async function sendTransactionWithRetry(
       toast.dismiss(loadingToast);
       const confirmToast = toast.loading(`Confirming transaction... Please wait.`);
       
-      // Create confirmation promise with timeout
+      // Create confirmation promise with timeout and proper handling for blockhash expiration
       const confirmationPromise = new Promise<boolean>((resolve, reject) => {
         // Set confirmation timeout
         const timeoutId = setTimeout(() => {
@@ -96,17 +108,14 @@ export async function sendTransactionWithRetry(
         // Start watching for confirmation
         (async () => {
           try {
-            // Proper typesafe confirmation strategy
-            const confirmationStrategy = {
+            // Confirm with more flexible strategy - don't require blockhash verification
+            // This helps when the RPC node might not have the blockhash anymore
+            const confirmation = await connection.confirmTransaction({
               signature,
+              // Still pass blockhash info for nodes that support it
               blockhash,
               lastValidBlockHeight
-            };
-            
-            const confirmation = await connection.confirmTransaction(
-              confirmationStrategy, 
-              confirmCommitment as any
-            );
+            }, confirmCommitment as any);
             
             clearTimeout(timeoutId);
             
@@ -116,24 +125,87 @@ export async function sendTransactionWithRetry(
               resolve(true);
             }
           } catch (error) {
+            // For confirmation errors, check if the transaction was actually confirmed despite the error
+            try {
+              // Double-check transaction status directly
+              const status = await connection.getSignatureStatus(signature, {
+                searchTransactionHistory: true,
+              });
+              
+              if (status && status.value && !status.value.err) {
+                // Transaction was confirmed despite the error in confirmTransaction
+                clearTimeout(timeoutId);
+                resolve(true);
+                return;
+              }
+            } catch (statusError) {
+              // Ignore errors from getSignatureStatus and proceed with original error
+              console.log("Error checking transaction status:", statusError);
+            }
+            
             clearTimeout(timeoutId);
             reject(error);
           }
         })();
       });
       
-      // Wait for confirmation
-      await confirmationPromise;
-      
-      // If we get here, transaction was successful
-      success = true;
-      toast.dismiss(confirmToast);
-      toast.success('Transaction confirmed successfully!');
-      
-      return signature;
+      try {
+        // Wait for confirmation
+        await confirmationPromise;
+        
+        // If we get here, transaction was successful
+        success = true;
+        toast.dismiss(confirmToast);
+        toast.success('Transaction confirmed successfully!');
+        
+        return signature;
+      } catch (confirmError: any) {
+        // Check if it's a blockhash expiration error but the transaction might still be valid
+        if (confirmError.message && (
+            confirmError.message.includes('block height exceeded') || 
+            confirmError.message.includes('blockhash not found')
+        )) {
+          // Manually check transaction status after a small delay
+          // Sometimes transactions are confirmed but the confirmation API throws errors
+          toast.loading(`Verifying transaction status...`);
+          await new Promise(r => setTimeout(r, 2000));
+          
+          try {
+            const status = await connection.getSignatureStatus(signature, {
+              searchTransactionHistory: true,
+            });
+            
+            if (status && status.value && !status.value.err) {
+              // Transaction was actually confirmed despite the blockhash expiration error
+              success = true;
+              toast.dismiss(confirmToast);
+              toast.success('Transaction confirmed successfully!');
+              return signature;
+            }
+          } catch (statusError) {
+            // Continue with retry if we can't verify status
+            console.log("Error checking transaction status:", statusError);
+          }
+        }
+        
+        // Rethrow the error to be caught by the outer try/catch
+        throw confirmError;
+      }
     } catch (error: any) {
       lastError = error;
       console.error(`Transaction attempt ${attempt} failed:`, error);
+      
+      // Handle wallet connection errors specifically
+      const isWalletError = 
+        error.message?.includes('Wallet is not connected') || 
+        error.message?.includes('Wallet disconnected') ||
+        error.message?.includes('wallet adapter');
+        
+      if (isWalletError) {
+        toast.dismiss(loadingToast);
+        toast.error('Wallet connection error. Please reconnect your wallet and try again.');
+        throw error; // Don't retry on wallet errors
+      }
       
       // Check if this is a blockhash-related error that we can retry
       const isBlockhashError = 
@@ -142,7 +214,7 @@ export async function sendTransactionWithRetry(
         error.message?.includes('invalid blockhash');
         
       // If we have more retries and it's a blockhash error, retry
-      if (attempt < maxRetries && isBlockhashError) {
+      if (attempt < maxRetries && (isBlockhashError || error.message?.includes('timeout'))) {
         toast.dismiss(loadingToast);
         toast.loading(`Transaction expired. Retrying with fresh blockhash (${attempt}/${maxRetries})...`);
         
@@ -352,7 +424,7 @@ export async function sendTokenTransaction(
           
           if (confirmError.message?.includes('timeout')) {
             // For timeout errors, provide a signature and notify the user
-            toast.warning(
+            toast.loading(
               'Transaction may have succeeded, but confirmation timed out. Please check explorer.'
             );
             return signature;

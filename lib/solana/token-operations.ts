@@ -88,30 +88,49 @@ export async function mintTokens(
   connection: Connection,
   wallet: WalletAdapter,
   mintAddress: string,
-  amount: number,
-  destinationAddress?: string // If not provided, mint to wallet's own address
+  rawAmount: string | number // Accept either string or number for flexibility
 ): Promise<string> {
+  console.log('Minting tokens started...');
+  
+  if (!wallet.publicKey) {
+    throw new Error('Wallet not connected');
+  }
+
   try {
-    // Parse mint address
-    const mintPublicKey = new PublicKey(mintAddress)
+    // Convert mint address to PublicKey
+    const mintPubkey = new PublicKey(mintAddress);
     
-    // Get destination address (default to wallet address if not provided)
-    const destinationPublicKey = destinationAddress 
-      ? new PublicKey(destinationAddress) 
-      : wallet.publicKey
+    // Get mint info
+    const mintInfo = await getMint(connection, mintPubkey);
     
-    // Get mint info to determine decimals
-    const mintInfo = await getMint(connection, mintPublicKey)
-    
-    // Verify mint authority
-    if (!mintInfo.mintAuthority || !mintInfo.mintAuthority.equals(wallet.publicKey)) {
-      throw new Error('Connected wallet is not the mint authority for this token')
+    // Check if wallet is the mint authority
+    if (mintInfo.mintAuthority !== null) {
+      const mintAuth = new PublicKey(mintInfo.mintAuthority.toString());
+      if (!wallet.publicKey.equals(mintAuth)) {
+        throw new Error('Your wallet is not the mint authority for this token');
+      }
+    } else {
+      throw new Error('This token has no mint authority set and cannot be minted');
+    }
+
+    // Convert amount to proper format for BigInt - ensure it's a string
+    let amountBigInt: bigint;
+    try {
+      // Ensure we have a clean string for BigInt constructor
+      const amountStr = typeof rawAmount === 'number' 
+        ? rawAmount.toString() 
+        : rawAmount;
+        
+      amountBigInt = BigInt(amountStr);
+    } catch (error) {
+      console.error('Failed to convert amount to BigInt:', error);
+      throw new Error('Invalid amount format. Please check your input.');
     }
     
     // Get associated token account
     const tokenAccount = await getAssociatedTokenAddress(
-      mintPublicKey,
-      destinationPublicKey,
+      mintPubkey,
+      wallet.publicKey,
       false,
       TOKEN_PROGRAM_ID,
       ASSOCIATED_TOKEN_PROGRAM_ID
@@ -127,24 +146,20 @@ export async function mintTokens(
       const createATAInstruction = createAssociatedTokenAccountInstruction(
         wallet.publicKey,
         tokenAccount,
-        destinationPublicKey,
-        mintPublicKey,
+        wallet.publicKey,
+        mintPubkey,
         TOKEN_PROGRAM_ID,
         ASSOCIATED_TOKEN_PROGRAM_ID
       )
       transaction.add(createATAInstruction)
     }
     
-    // Convert amount to proper BigInt format
-    // This is critical - we must use BigInt directly on the amount which should already include decimal places
-    const bigIntAmount = BigInt(amount)
-    
     // Add mint instruction with proper BigInt value
     const mintInstruction = createMintToInstruction(
-      mintPublicKey,
+      mintPubkey,
       tokenAccount,
       wallet.publicKey,
-      bigIntAmount,
+      amountBigInt,
       [],
       TOKEN_PROGRAM_ID
     )

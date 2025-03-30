@@ -175,10 +175,10 @@ export function TokenMinter() {
         connection,
         {
           publicKey,
-          sendTransaction,
+          sendTransaction: sendTransaction,
         },
         mintAddress,
-        rawAmount
+        rawAmount.toString()
       )
 
       // Update loading message for confirmation
