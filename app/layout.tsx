@@ -2,7 +2,6 @@ import type React from "react"
 import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
-import { Toaster } from "react-hot-toast"
 import WalletContextProvider from "@/components/wallet/wallet-provider"
 import { ThemeProvider } from "@/components/theme-provider"
 import Script from 'next/script'
