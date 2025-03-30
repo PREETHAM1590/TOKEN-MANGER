@@ -162,7 +162,11 @@ export function TokenMinter() {
 
       // Import and mint tokens
       const { mintTokens } = await import('@/lib/solana/token-operations')
-      const mintAmount = Math.floor(amountNum * Math.pow(10, tokenDecimals))
+      
+      // Calculate exact amount with decimal places
+      // This is critical for proper token minting
+      const decimalMultiplier = Math.pow(10, tokenDecimals)
+      const rawAmount = Math.floor(amountNum * decimalMultiplier)
 
       // Update loading message for transaction
       toastLoading('Please approve the transaction in your wallet...', { id: loadingToast })
@@ -171,10 +175,10 @@ export function TokenMinter() {
         connection,
         {
           publicKey,
-          sendTransaction,
+          signTransaction: sendTransaction,
         },
         mintAddress,
-        mintAmount
+        rawAmount
       )
 
       // Update loading message for confirmation

@@ -104,7 +104,7 @@ export async function mintTokens(
     const mintInfo = await getMint(connection, mintPublicKey)
     
     // Verify mint authority
-    if (!mintInfo.mintAuthority?.equals(wallet.publicKey)) {
+    if (!mintInfo.mintAuthority || !mintInfo.mintAuthority.equals(wallet.publicKey)) {
       throw new Error('Connected wallet is not the mint authority for this token')
     }
     
@@ -135,12 +135,16 @@ export async function mintTokens(
       transaction.add(createATAInstruction)
     }
     
-    // Add mint instruction
+    // Convert amount to proper BigInt format
+    // This is critical - we must use BigInt directly on the amount which should already include decimal places
+    const bigIntAmount = BigInt(amount)
+    
+    // Add mint instruction with proper BigInt value
     const mintInstruction = createMintToInstruction(
       mintPublicKey,
       tokenAccount,
       wallet.publicKey,
-      BigInt(amount),
+      bigIntAmount,
       [],
       TOKEN_PROGRAM_ID
     )
@@ -153,11 +157,11 @@ export async function mintTokens(
       transaction,
       [],
       {
-        maxRetries: 3,
+        maxRetries: 5, // Increase retries for higher success rate
         skipPreflight: false,
-        preflightCommitment: 'finalized',
-        confirmCommitment: 'finalized',
-        maxTimeout: 120000 // 2 minutes
+        preflightCommitment: 'processed', // Use 'processed' for faster initial confirmation
+        confirmCommitment: 'confirmed',  // But still wait for 'confirmed' status
+        maxTimeout: 180000 // 3 minutes to allow for network congestion
       }
     )
     
@@ -168,19 +172,33 @@ export async function mintTokens(
     
     // Provide more specific error messages
     if (error instanceof Error) {
-      if (error.message.includes('not the mint authority')) {
+      const errorMessage = error.message || '';
+      
+      // Check common error patterns
+      if (errorMessage.includes('not the mint authority') || errorMessage.includes('Invalid mint authority')) {
         throw new Error('Your wallet is not the mint authority for this token')
-      } else if (error.message.includes('insufficient funds')) {
+      } 
+      else if (errorMessage.includes('insufficient funds')) {
         throw new Error('Insufficient SOL balance to pay for transaction fees')
-      } else if (error.message.includes('0x1')) {
-        throw new Error('Transaction simulation failed. Please check your inputs and try again')
-      } else if (error.message.includes('blockhash')) {
-        throw new Error('Transaction timed out. Please try again')
-      } else if (error.message.includes('Transaction was not confirmed')) {
-        throw new Error('Transaction was not confirmed in time. Please check the explorer for status')
+      } 
+      else if (errorMessage.includes('0x1') || errorMessage.includes('custom program error: 0x1')) {
+        throw new Error('Transaction simulation failed. The amount may be too large or there may be an issue with the token')
+      } 
+      else if (errorMessage.includes('blockhash') || errorMessage.includes('Block height exceeded')) {
+        throw new Error('Transaction timed out. The Solana network may be congested, please try again')
+      } 
+      else if (errorMessage.includes('Transaction was not confirmed') || errorMessage.includes('timeout')) {
+        throw new Error('Transaction was not confirmed in time. Check Solana Explorer for transaction status')
+      }
+      else if (errorMessage.includes('invalid mint')) {
+        throw new Error('Invalid mint address. Please check the address and try again')
+      }
+      else if (errorMessage.includes('Account does not exist')) {
+        throw new Error('Token account does not exist. This may be an invalid mint address')
       }
     }
     
+    // For any other errors, just pass through the original error
     throw error
   }
 }
