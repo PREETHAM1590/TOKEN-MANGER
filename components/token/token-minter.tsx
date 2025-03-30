@@ -82,6 +82,7 @@ export function TokenMinter() {
   const [tokenDecimals, setTokenDecimals] = useState(9) // Default to 9 decimals
   const [isMintAuth, setIsMintAuth] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [loadingToastId, setLoadingToastId] = useState<string | null>(null)
 
   // Check if connected wallet is the mint authority for the token
   useEffect(() => {
@@ -151,14 +152,18 @@ export function TokenMinter() {
     setSignature(null)
 
     try {
-      // Show loading toast with ID to dismiss it later
-      const loadingToast = toastLoading('Preparing to mint tokens...', { id: `mint-loading-${Date.now()}` })
+      // Generate a unique ID for this minting operation and store it in state
+      const newToastId = `mint-loading-${Date.now()}`
+      setLoadingToastId(newToastId)
+      
+      // Show loading toast with the stored ID
+      toastLoading('Preparing to mint tokens...', { id: newToastId })
 
       // Get mint info and validate
       const mintPubkey = new PublicKey(mintAddress)
       
-      // Update loading message
-      toastLoading('Creating transaction...', { id: loadingToast })
+      // Update loading message using the same ID
+      toastLoading('Creating transaction...', { id: newToastId })
 
       // Import and mint tokens
       const { mintTokens } = await import('@/lib/solana/token-operations')
@@ -168,8 +173,8 @@ export function TokenMinter() {
       const decimalMultiplier = Math.pow(10, tokenDecimals)
       const rawAmount = Math.floor(amountNum * decimalMultiplier)
 
-      // Update loading message for transaction
-      toastLoading('Please approve the transaction in your wallet...', { id: loadingToast })
+      // Update loading message for transaction using the same ID
+      toastLoading('Please approve the transaction in your wallet...', { id: newToastId })
 
       const sig = await mintTokens(
         connection,
@@ -181,8 +186,8 @@ export function TokenMinter() {
         rawAmount.toString()
       )
 
-      // Update loading message for confirmation
-      toastLoading('Confirming transaction...', { id: loadingToast })
+      // Update loading message for confirmation using the same ID
+      toastLoading('Confirming transaction...', { id: newToastId })
 
       // Update state
       setSignature(sig)
@@ -201,7 +206,7 @@ export function TokenMinter() {
       })
 
       // Clear loading toast and show success
-      toast.dismiss(loadingToast)
+      toast.dismiss(newToastId)
       toastSuccess('Tokens minted successfully!', { id: `mint-success-${Date.now()}` })
       
       // Reset amount field
@@ -210,6 +215,11 @@ export function TokenMinter() {
     } catch (error) {
       console.error('Error minting token:', error)
       
+      // Dismiss the loading toast if it exists
+      if (loadingToastId) {
+        toast.dismiss(loadingToastId)
+      }
+      
       // Show error toast with better styling
       toastError(
         error instanceof Error ? error.message : 'Failed to mint tokens', 
@@ -217,6 +227,8 @@ export function TokenMinter() {
       )
     } finally {
       setIsLoading(false)
+      // Reset the loading toast ID
+      setLoadingToastId(null)
     }
   }
 
