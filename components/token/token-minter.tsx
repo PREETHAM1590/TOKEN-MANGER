@@ -127,23 +127,23 @@ export function TokenMinter() {
     e.preventDefault()
     
     if (!publicKey) {
-      toastError('Please connect your wallet', { id: 'wallet-connect-error' })
+      toastError('Please connect your wallet', { id: `wallet-connect-error-${Date.now()}` })
       return
     }
 
     if (!mintAddress) {
-      toastError('Please enter a mint address', { id: 'mint-address-error' })
+      toastError('Please enter a mint address', { id: `mint-address-error-${Date.now()}` })
       return
     }
 
     if (!isMintAuth) {
-      toastError('Your wallet is not the mint authority for this token', { id: 'mint-auth-error' })
+      toastError('Your wallet is not the mint authority for this token', { id: `mint-auth-error-${Date.now()}` })
       return
     }
 
     const amountNum = parseFloat(amount)
     if (isNaN(amountNum) || amountNum <= 0) {
-      toastError('Please enter a valid amount greater than 0', { id: 'amount-error' })
+      toastError('Please enter a valid amount greater than 0', { id: `amount-error-${Date.now()}` })
       return
     }
 
@@ -152,7 +152,7 @@ export function TokenMinter() {
 
     try {
       // Show loading toast with ID to dismiss it later
-      const loadingToast = toastLoading('Preparing to mint tokens...', { id: 'mint-loading' })
+      const loadingToast = toastLoading('Preparing to mint tokens...', { id: `mint-loading-${Date.now()}` })
 
       // Get mint info and validate
       const mintPubkey = new PublicKey(mintAddress)
@@ -175,7 +175,7 @@ export function TokenMinter() {
         connection,
         {
           publicKey,
-          signTransaction: sendTransaction,
+          sendTransaction,
         },
         mintAddress,
         rawAmount
@@ -202,7 +202,7 @@ export function TokenMinter() {
 
       // Clear loading toast and show success
       toast.dismiss(loadingToast)
-      toastSuccess('Tokens minted successfully!', { id: 'mint-success' })
+      toastSuccess('Tokens minted successfully!', { id: `mint-success-${Date.now()}` })
       
       // Reset amount field
       setAmount("")
@@ -213,7 +213,7 @@ export function TokenMinter() {
       // Show error toast with better styling
       toastError(
         error instanceof Error ? error.message : 'Failed to mint tokens', 
-        { id: 'mint-error' }
+        { id: `mint-error-${Date.now()}` }
       )
     } finally {
       setIsLoading(false)
